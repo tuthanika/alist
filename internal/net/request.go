@@ -643,6 +643,10 @@ func (br *Buf) Read(p []byte) (n int, err error) {
 		return 0, io.EOF
 	}
 	br.rw.Lock()
+	if br.buffer == nil {
+		br.rw.Unlock()
+		return 0, io.ErrClosedPipe
+	}
 	n, err = br.buffer.Read(p)
 	br.rw.Unlock()
 	if err == nil {
@@ -672,10 +676,15 @@ func (br *Buf) Write(p []byte) (n int, err error) {
 	}
 	br.rw.Lock()
 	defer br.rw.Unlock()
+	if br.buffer == nil {
+		return 0, io.ErrClosedPipe
+	}
 	n, err = br.buffer.Write(p)
 	return
 }
 
 func (br *Buf) Close() {
+	br.rw.Lock()
+	defer br.rw.Unlock()
 	br.buffer = nil
 }

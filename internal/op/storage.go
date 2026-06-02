@@ -229,10 +229,13 @@ func UpdateStorage(ctx context.Context, storage model.Storage) error {
 	if err != nil {
 		return errors.WithMessage(err, "failed update storage in database")
 	}
+	storageDriver, err := GetStorageByMountPath(oldStorage.MountPath)
+	if err == nil {
+		ClearCache(storageDriver, "/")
+	}
 	if storage.Disabled {
 		return nil
 	}
-	storageDriver, err := GetStorageByMountPath(oldStorage.MountPath)
 	if oldStorage.MountPath != storage.MountPath {
 		// mount path renamed, need to drop the storage
 		storagesMap.Delete(oldStorage.MountPath)

@@ -14,6 +14,7 @@ var MCPCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		Init()
 		bootstrap.LoadStorages()
+		bootstrap.InitTaskManager()
 		username, _ := cmd.Flags().GetString("user")
 		if err := mcpserver.ServeStdio(username); err != nil {
 			utils.Log.Fatalf("MCP STDIO server error: %v", err)

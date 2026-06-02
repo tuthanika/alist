@@ -35,6 +35,7 @@ type DirReq struct {
 type ObjResp struct {
 	Id           string                     `json:"id"`
 	Path         string                     `json:"path"`
+	VirtualPath  string                     `json:"virtual_path"`
 	Name         string                     `json:"name"`
 	Size         int64                      `json:"size"`
 	IsDir        bool                       `json:"is_dir"`
@@ -65,6 +66,7 @@ type FsListResp struct {
 type ObjLabelResp struct {
 	Id           string                     `json:"id"`
 	Path         string                     `json:"path"`
+	VirtualPath  string                     `json:"virtual_path"`
 	Name         string                     `json:"name"`
 	Size         int64                      `json:"size"`
 	IsDir        bool                       `json:"is_dir"`
@@ -82,6 +84,7 @@ type ObjLabelResp struct {
 const (
 	DefaultPerPage = 200
 	MaxPerPage     = 500
+	AllPerPage     = -1
 )
 
 func FsList(c *gin.Context) {
@@ -136,7 +139,7 @@ func FsList(c *gin.Context) {
 	total, pageObjs := pagination(filtered, &req.PageReq)
 	respContent := toObjsResp(pageObjs, reqPath, isEncrypt(meta, reqPath))
 	pagesTotal := calcPagesTotal(total, req.PerPage)
-	hasMore := req.Page*req.PerPage < total
+	hasMore := req.PerPage != AllPerPage && req.Page*req.PerPage < total
 
 	common.SuccessResp(c, FsListResp{
 		Content:       respContent,
@@ -253,7 +256,10 @@ func normalizeListPage(page, perPage int) (int, int) {
 		effPage = 1
 	}
 	effPerPage := perPage
-	if effPerPage <= 0 {
+	if effPerPage < 0 {
+		return effPage, AllPerPage
+	}
+	if effPerPage == 0 {
 		effPerPage = DefaultPerPage
 	}
 	if effPerPage > MaxPerPage {
@@ -263,6 +269,12 @@ func normalizeListPage(page, perPage int) (int, int) {
 }
 
 func calcPagesTotal(total, perPage int) int {
+	if perPage == AllPerPage {
+		if total > 0 {
+			return 1
+		}
+		return 0
+	}
 	if total <= 0 || perPage <= 0 {
 		return 0
 	}
@@ -272,6 +284,9 @@ func calcPagesTotal(total, perPage int) int {
 func pagination(objs []model.Obj, req *model.PageReq) (int, []model.Obj) {
 	pageIndex, pageSize := req.Page, req.PerPage
 	total := len(objs)
+	if pageSize == AllPerPage {
+		return total, objs
+	}
 	start := (pageIndex - 1) * pageSize
 	if start > total {
 		return total, []model.Obj{}
@@ -305,6 +320,7 @@ func toObjsResp(objs []model.Obj, parent string, encrypt bool) []ObjLabelResp {
 		resp = append(resp, ObjLabelResp{
 			Id:           obj.GetID(),
 			Path:         obj.GetPath(),
+			VirtualPath:  utils.FixAndCleanPath(stdpath.Join(parent, obj.GetName())),
 			Name:         obj.GetName(),
 			Size:         obj.GetSize(),
 			IsDir:        obj.IsDir(),
@@ -333,6 +349,7 @@ type FsGetResp struct {
 	Readme   string         `json:"readme"`
 	Header   string         `json:"header"`
 	Provider string         `json:"provider"`
+	WebProxy bool           `json:"web_proxy"`
 	Related  []ObjLabelResp `json:"related"`
 }
 
@@ -367,14 +384,14 @@ func FsGet(c *gin.Context) {
 	}
 	var rawURL string
 
-	storage, err := fs.GetStorage(reqPath, &fs.GetStoragesArgs{})
+	storage, storageErr := fs.GetStorage(reqPath, &fs.GetStoragesArgs{})
 	provider := "unknown"
-	if err == nil {
+	if storageErr == nil {
 		provider = storage.Config().Name
 	}
 	if !obj.IsDir() {
-		if err != nil {
-			common.ErrorResp(c, err, 500)
+		if storageErr != nil {
+			common.ErrorResp(c, storageErr, 500)
 			return
 		}
 		query := ""
@@ -382,6 +399,7 @@ func FsGet(c *gin.Context) {
 			query = "?sign=" + sign.Sign(reqPath)
 		}
 		forceRedirectRawURL := storage.GetStorage().Driver == "BaiduYouth"
+		forcePreviewRawURL := storage.GetStorage().Driver == "Lark" && isLarkCloudDocName(obj.GetName())
 		forceProxyRawURL := storage.GetStorage().Driver == "Quark" && utils.GetFileType(obj.GetName()) == conf.VIDEO
 		if forceRedirectRawURL {
 			// Baidu Youth direct links are minted per request and are not stable enough
@@ -391,7 +409,7 @@ func FsGet(c *gin.Context) {
 				common.GetApiUrl(c.Request),
 				utils.EncodePath(reqPath, true),
 				query)
-		} else if storage.Config().MustProxy() || storage.GetStorage().WebProxy || forceProxyRawURL {
+		} else if !forcePreviewRawURL && (storage.Config().MustProxy() || storage.GetStorage().WebProxy || forceProxyRawURL) {
 			if storage.GetStorage().DownProxyUrl != "" {
 				rawURL = common.BuildDownProxyURL(
 					storage.GetStorage().DownProxyUrl,
@@ -437,6 +455,7 @@ func FsGet(c *gin.Context) {
 		ObjResp: ObjResp{
 			Id:           obj.GetID(),
 			Path:         obj.GetPath(),
+			VirtualPath:  utils.FixAndCleanPath(reqPath),
 			Name:         obj.GetName(),
 			Size:         obj.GetSize(),
 			IsDir:        obj.IsDir(),
@@ -453,6 +472,7 @@ func FsGet(c *gin.Context) {
 		Readme:   getReadme(meta, reqPath),
 		Header:   getHeader(meta, reqPath),
 		Provider: provider,
+		WebProxy: storageErr == nil && storage.GetStorage().WebProxy,
 		Related:  toObjsResp(related, parentPath, isEncrypt(parentMeta, parentPath)),
 	})
 }
@@ -469,6 +489,22 @@ func filterRelated(objs []model.Obj, obj model.Obj) []model.Obj {
 		}
 	}
 	return related
+}
+
+func isLarkCloudDocName(name string) bool {
+	for _, suffix := range []string{
+		".lark-doc",
+		".lark-docx",
+		".lark-sheet",
+		".lark-bitable",
+		".lark-mindnote",
+		".lark-slides",
+	} {
+		if strings.HasSuffix(name, suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 type FsOtherReq struct {
