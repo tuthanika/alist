@@ -17,8 +17,11 @@ type Addition struct {
 	ClientID      string `json:"client_id" required:"false" help:"Keep it empty if you don't have one"`
 	ClientSecret  string `json:"client_secret" required:"false" help:"Keep it empty if you don't have one"`
 
-	AccessToken     string
-	RootNamespaceId string
+	AccessToken     string `json:"AccessToken" required:"false"`
+	RootNamespaceId string `json:"RootNamespaceId" required:"false"`
+	
+	UseOnlineAPI    bool   `json:"use_online_api" default:"false"`
+	APIAddress      string `json:"api_url_address" default:"https://api.oplist.org/dropboxs/renewapi"`
 }
 
 var config = driver.Config{
